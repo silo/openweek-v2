@@ -1,2 +1,1 @@
 # openweek-v2
-# openweek-v2

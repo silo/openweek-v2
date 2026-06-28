@@ -1,0 +1,125 @@
+# Roadmap & Build Plan
+
+Phased build order. Commit logically between phases. Each phase lists its deliverables and how to verify it
+end-to-end. Scope is intentionally bounded — recurring tasks, reminders, two-way sync, and PWA are **later**.
+
+## Scope
+
+- **In scope (v1):** project setup + self-host ops, auth, week grid + task CRUD + the mutation store, drag &
+  drop, calendar-sync **foundation** (read-only mirror).
+- **Out of scope (later):** recurring tasks, reminders/notifications, two-way calendar sync (push), PWA/offline,
+  email verification + password reset, multiple boards UI polish, sharing/collaboration.
+
+The schema already reserves inert columns (`recurrenceRule`, `recurrenceId`, `parentId`) so the later features
+don't force a painful migration. See [data-model.md](./data-model.md).
+
+## Phase 1 — Setup + self-host ops
+
+**Deliverables**
+- Tailwind v4 (`@tailwindcss/vite`) + DaisyUI 5 paper theme (`paper` / `paper-dark`), hairline + pastel tokens;
+  self-hosted Inter + Caveat.
+- Pinia; Drizzle + pg wired; `drizzle.config`; committed migration workflow.
+- `compose.yaml` (app + postgres + named volume) + `Dockerfile`; `.env.example` (all secrets + proxy vars);
+  boot-time Zod env validation (fail fast); migrate-on-start.
+- `@nuxt/eslint` + `nuxt typecheck` wired as CI gates; pnpm scripts (`dev`, `db:generate`, `db:migrate`,
+  `auth:gen`, `typecheck`, `lint`, `test`).
+- `LICENSE` (AGPL-3.0), README self-host section + backup/restore, source-link/version footer.
+
+**Verify:** `docker compose up -d` starts postgres; `pnpm db:migrate` applies; `pnpm dev` renders an **empty
+week grid** at :3000; `pnpm typecheck` + `pnpm lint` pass; boot fails fast with a clear message if a secret is
+missing.
+
+## Phase 2 — Auth
+
+**Deliverables**
+- Better Auth: email/password + optional Google **login** + admin plugin; `server/api/auth/[...all].ts`.
+- First-user-becomes-admin via `databaseHooks.user.create.before` (count users → `role`).
+- Server session guard + admin guard; SSR-hydrated `useSession`; login / register / logout / settings /
+  `admin/users` pages in the paper style.
+- Reverse-proxy config documented (`BETTER_AUTH_URL`, `trustedOrigins`, secure cookies).
+
+**Verify:** first registered user row has `role='admin'`, second `'user'`; logout/login works; `/admin/users`
+returns 403 for non-admins; login works behind an HTTPS reverse proxy with the documented env.
+
+## Phase 3 — Week grid + tasks + the mutation store
+
+**Deliverables**
+- The **Pinia optimistic-mutation store first** (normalized task cache, optimistic update + rollback).
+- All task CRUD, toggle-done, color tag, notes, and Someday lists routed **through the store**; prev / next /
+  this-week navigation; per-user week start.
+- Mobile: `DayColumn` as the reusable atom — desktop 7-col grid, phone single-day swipe + Someday sheet.
+- **Opt-in rollover:** per-user toggle in settings + idempotent `POST /api/tasks/rollover` (skips recurring
+  instances, guarded by `lastRolloverDate`).
+
+**Verify:** create/edit/toggle/color/note tasks in days + Someday; week nav works; enabling rollover moves only
+unfinished past non-recurring tasks once per local day (re-calling is a no-op); `rolledOverFrom` preserved.
+
+## Phase 4 — Drag & drop
+
+**Deliverables**
+- `useTaskBoard` composable over `@atlaskit/pragmatic-drag-and-drop` (core + `/auto-scroll` + `/hitbox`):
+  reorder within a list, move day↔day and day↔list.
+- On drop, compute `generateKeyBetween(prev, next)` and persist via the store (PATCH `{ date|listId, position }`).
+- Keyboard move model + the non-drag **"move to…" menu** fallback; cross-week moves via the nav target.
+- Grid rendered client-side to avoid hydration mismatch.
+
+**Verify:** drag within/between days/lists persists order after refresh; keyboard-only move works; move-menu
+fallback works; no hydration warning; fractional-index edge cases (start/end/empty/single) behave.
+
+## Phase 5 — Calendar sync (foundation)
+
+**Deliverables**
+- Unified connect flows: Google OAuth (dedicated, `calendar.readonly` + offline, encrypted refresh token),
+  CalDAV (tsdav + app-password, encrypted), iCal URL.
+- `external_calendars` enumeration + map-to-board; Nitro scheduled poll + incremental sync (syncToken/ctag,
+  410 → full resync); recurrence expanded for the visible week via `ical.js`.
+- Read-only events rendered in the grid; "Sync now" button.
+
+**Verify:** connect a Google account + a CalDAV account + an iCal URL; events show read-only; a recurring event
+expands correctly across next/prev week; DB inspection confirms tokens are ciphertext, not plaintext.
+
+## Cross-cutting tests (Vitest, throughout)
+
+Setup, conventions, and the coverage map live in [testing.md](./testing.md). Status:
+
+- Zod input rejection (shared DTOs). ✅ done
+- Fractional-index move at start / end / empty / single. ✅ done
+- Rollover idempotency (decision + per-timezone local day). ✅ done
+- First-user-admin rule. ✅ done
+- Optimistic store: mutate → reconcile / rollback + undo. ✅ done (bonus)
+- AES-GCM encrypt → decrypt round-trip. ⏳ lands with the crypto util in Phase 5.
+
+DB-level guarantees and drag/render are verified against real Postgres + a scripted Playwright
+run for now; a committed Playwright e2e suite is a later phase.
+
+## Phase 6 — Openweek v2 (paper) ✅
+
+A redesign + feature expansion (folds in the old Phase 5 sync plus recurrence/subtasks). Built in
+commit-able sub-stages **6a–6i** (see [decisions.md](./decisions.md) D15–D18):
+
+- **6a Skin:** IBM Plex Mono/Sans, paper-v2 palette, runtime `--color-accent`, `.tag-underline`/`.tag-swipe`.
+- **6b Schema:** `lists.color`, `tasks.startTime` (`'HH:mm'` label), activated `recurrenceId`/`parentId`
+  self-FKs, `linkedEventId`, the three sync tables, and `accentColor`/`tagStyle`/`showCalendarEvents` user
+  fields. One migration (`0003`).
+- **6c Layout:** top bar + 7-equal-column grid + bottom tabbed list drawer (replaces the Someday column).
+- **6d Tasks:** circle marks, highlighter tags, time/recurrence/subtask badges, inline notes, subtasks UI.
+- **6e Recurrence:** pure `shared/utils/recurrence.ts` + idempotent per-week materialization; rollover skips
+  templates/instances/subtasks.
+- **6f Sync backend:** `server/utils/crypto.ts` (AES-256-GCM), Google/CalDAV/iCal connect flows, the sync
+  engine (full-replace), Nitro scheduled task.
+- **6g Sync UI:** read-only event rows (source-colored), convert-to-task, calendars dropdown.
+- **6h Chrome:** appearance settings (accent/tag/show-events), calendar connections UI, in-week search.
+- **6i:** Vitest for crypto (AES round-trip), recurrence, ical.js expansion, sync-cursor, new DTOs.
+
+**Verified:** migrations apply; iCal connect → sync → events expand across the week; convert links a task;
+recurring task materializes on nav; secrets stored as ciphertext; accent recolors live; typecheck+lint+test
+green (103 tests). Google/CalDAV connect code is in place but unverified without live credentials.
+
+**Known limitations (follow-ups):** event times render in the server timezone (fine for single-TZ self-host);
+sync is full-replace (incremental cursors via `sync-cursor.ts` are tested but not yet wired); recurrence has no
+"edit this/future" UI yet.
+
+## Later phases (not scheduled)
+
+Recurring tasks (materialize instances from `recurrenceRule`) · reminders/notifications · two-way calendar
+sync · subtasks (`parentId`) · PWA/offline (`@vite-pwa/nuxt`) · email verification + password reset · i18n.
