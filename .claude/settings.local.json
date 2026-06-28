@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(unzip:*)",
+      "Bash(cd:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(wc:*)",
+      "Bash(diff:*)",
+      "Bash(git ls-files:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
